@@ -43,3 +43,57 @@ resource "google_cloud_run_service_iam_binding" "dashboard_noauth" {
   members    = ["allUsers"]
   depends_on = [google_cloud_run_service.dashboard]
 }
+
+resource "null_resource" "cloneDestinationRepository" {
+  count    = var.enable_dashboard ? 0 : 1
+  provisioner "local-exec" {
+    command = <<EOT
+        git clone https://${var.gf_github_token}@wwwin-github.cisco.com/${var.gf_github_org}/${var.gf_github_repo}.git
+    EOT
+  }
+  depends_on = [google_cloud_run_service_iam_binding.dashboard_noauth]
+}
+
+
+resource "null_resource" "CreateNewDestinationBranch" {
+  count    = var.enable_dashboard ? 0 : 1
+  provisioner "local-exec" {
+    command = <<EOT
+        cd ${var.gf_github_repo}
+        git branch ${var.gf_new_branch}
+        git checkout ${var.gf_new_branch}
+        cd ../
+    EOT
+  }
+  depends_on = [null_resource.cloneDestinationRepository]
+}
+
+
+resource "null_resource" "CopyCommitAndPush" {
+  count    = var.enable_dashboard ? 0 : 1
+  provisioner "local-exec" {
+    command = <<EOT
+
+      cp ${path.module}/files/fourkeys_dashboard.json ${var.gf_github_repo}/dashboards
+      cd ${var.gf_github_repo}
+      git add dashboards/*
+      git commit -m "Added New Dashboard File"
+      git push --set-upstream origin ${var.gf_github_repo}
+    EOT
+  }
+  depends_on = [null_resource.CreateNewDestinationBranch]
+}
+
+resource "null_resource" "PullRequest" {
+  count    = var.enable_dashboard ? 0 : 1
+  provisioner "local-exec" {
+    command = <<EOT
+    curl -X POST -H "Accept: application/vnd.github+json" \
+  -H "Authorization: Bearer ${var.gf_github_token}"\
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  https://wwwin-github.cisco.com/api/v3/repos/${var.gf_github_org}/${var.gf_github_repo}/pulls \
+  -d '{"title":"Added New Dashboard","body":"Added New Dashboard!","head":"${var.gf_github_repo}","base":"${var.gf_base_branch}"}'
+    EOT
+  }
+  depends_on = [null_resource.CopyCommitAndPush]
+}
